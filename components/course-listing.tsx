@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { auth, db } from '../../../src/firebaseConfig'
+import { auth, db } from '../../lib/firebase/config'
 import { doc, getDoc } from 'firebase/firestore'
 import { Input } from "./ui/input"
 import { Button } from "./ui/button"
