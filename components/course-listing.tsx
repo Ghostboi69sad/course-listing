@@ -1,9 +1,9 @@
-'use client'
 
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { auth, db } from '../../lib/firebase/config'
-import { doc, getDoc } from 'firebase/firestore'
+import { getAuth } from 'firebase/auth';
+import { database as db } from '../../../lib/firebase/config'
+import { ref, onValue, query, orderByChild, get } from 'firebase/database'
 import { Input } from "./ui/input"
 import { Button } from "./ui/button"
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "./ui/card"
@@ -11,83 +11,92 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Label } from "./ui/label"
 import { Star, ChevronLeft, ChevronRight, Trash2, Edit } from "lucide-react"
 import Navbar from '../../component/Navbar/Navbar'
-
-interface Course {
-  id: string;
-  name: string;
-  description: string;
-  imageUrl: string;
-  category: string;
-  price: number;
-  rating: number;
-  videoCount: number;
-}
+import type { Course } from '../../types/course';
+import { FirebaseError } from 'firebase/app';
+import { useAuth } from '../../../lib/hooks/useAuth';
+import type { CourseData } from '../../../types/firebase';
+import { transformCourseData } from '../../../lib/utils/course'
 
 export const CourseListing: React.FC = () => {
-  const [courses, setCourses] = useState<Course[]>([])
+  const { user, isAdmin, loading } = useAuth();
+  const [courses, setCourses] = useState<CourseData[]>([])
   const [searchTerm, setSearchTerm] = useState("")
   const [currentPage, setCurrentPage] = useState(1)
-  const [newCourse, setNewCourse] = useState<Omit<Course, 'id'>>({
-    name: "",
+  const [newCourse, setNewCourse] = useState<Omit<CourseData, 'id'>>({
+    title: "",
     description: "",
-    imageUrl: "",
-    category: "",
-    price: 0,
+    instructor: "",
+    duration: "",
+    level: "Beginner",
     rating: 0,
-    videoCount: 0
+    enrolledStudents: 0,
+    price: 0,
+    chapters: [],
+    isPublic: false,
+    isPremium: false,
+    thumbnail: "",
+    imageUrl: "",
+    videoCount: 0,
+    category: "",
+    accessType: 'free',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
   })
-  const [courseToDelete, setCourseToDelete] = useState<Course | null>(null)
-  const [isAdmin, setIsAdmin] = useState(false)
-  const navigate = useNavigate()
+  const [courseToDelete, setCourseToDelete] = useState<CourseData | null>(null)
+  const [error, setError] = useState<string>("");
+  const navigate = useNavigate();
+  const [filteredCourses, setFilteredCourses] = useState<CourseData[]>([]);
 
   useEffect(() => {
-    const checkUserRole = async () => {
-      const user = auth.currentUser
-      if (user) {
-        const userDoc = await getDoc(doc(db, 'users', user.uid))
-        const userData = userDoc.data()
-        setIsAdmin(userData?.role === 'admin')
+    const [loading, setLoading] = useState(true);
+    
+    const coursesRef = ref(db, 'courses');
+    const coursesQuery = query(coursesRef, orderByChild('createdAt'));
+    
+    const unsubscribe = onValue(coursesQuery, (snapshot) => {
+      if (snapshot.exists()) {
+        const coursesData = Object.entries(snapshot.val()).map(([id, data]) => 
+          transformCourseData({ id, ...data as Omit<CourseData, 'id'> }) as CourseData
+        );
+        setCourses(coursesData);
+        setFilteredCourses(coursesData);
       }
-    }
-    checkUserRole()
-    fetchCourses()
-  }, [])
+      setLoading(false);
+    }, (error) => {
+      console.error('Error fetching courses:', error);
+      setError('Failed to fetch courses');
+      // ... existing code ...
+const [loading, setLoading] = useState(false);
+    });
 
-  const fetchCourses = async () => {
-    // Implement fetching courses from your backend or Firestore
-    const coursesData = [
-      {
-        id: "1",
-        name: "After Effects للمبتدئين",
-        description: "تعلم أساسيات After Effects وابدأ في إنشاء مؤثرات بصرية مذهلة.",
-        imageUrl: "/placeholder-course.jpg",
-        category: "تصميم",
-        price: 99,
-        rating: 4.5,
-        videoCount: 12
-      },
-      {
-        id: "2",
-        name: "تصميم واجهات المستخدم UI/UX",
-        description: "تعلم أساسيات تصميم واجهات المستخدم وتجربة المستخدم.",
-        imageUrl: "/placeholder-ui-ux.jpg",
-        category: "تصميم",
-        price: 149,
-        rating: 4.8,
-        videoCount: 15
-      }
-    ]
-    setCourses(coursesData)
+    return () => unsubscribe();
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="overflow-hidden bg__purple min-h-screen">
+        <Navbar />
+        <div className="container py-5">
+          <div className="text-center text-white">
+            جاري التحميل...
+          </div>
+        </div>
+      
+      </div>
+    );
   }
 
   const coursesPerPage = 15
-  const filteredCourses = courses.filter(course =>
-    course.name.toLowerCase().includes(searchTerm.toLowerCase())
-  )
-  const totalPages = Math.ceil(filteredCourses.length / coursesPerPage)
+  const filteredResults = React.useMemo(() => 
+    courses.filter(course =>
+      course.title.toLowerCase().includes(searchTerm.toLowerCase())
+    ),
+    [courses, searchTerm]
+  );
+  const totalPages = Math.ceil(filteredResults.length / coursesPerPage)
   const indexOfLastCourse = currentPage * coursesPerPage
   const indexOfFirstCourse = indexOfLastCourse - coursesPerPage
-  const currentCourses = filteredCourses.slice(indexOfFirstCourse, indexOfLastCourse)
+  const currentCourses = filteredResults.slice(indexOfFirstCourse, indexOfLastCourse)
 
   const handleAddCourse = async () => {
     if (!isAdmin) return
@@ -96,13 +105,24 @@ export const CourseListing: React.FC = () => {
     const newCourseWithId = { ...newCourse, id: Date.now().toString() }
     setCourses([...courses, newCourseWithId])
     setNewCourse({
-      name: "",
+      title: "",
       description: "",
-      imageUrl: "",
-      category: "",
-      price: 0,
+      instructor: "",
+      duration: "",
+      level: "Beginner",
       rating: 0,
-      videoCount: 0
+      enrolledStudents: 0,
+      price: 0,
+      chapters: [],
+      isPublic: false,
+      isPremium: false,
+      thumbnail: "",
+      imageUrl: "",
+      videoCount: 0,
+      category: "",
+      accessType: 'free',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
     })
     // Navigate to the new course page
     navigate(`/course/${newCourseWithId.id}`)
@@ -116,10 +136,42 @@ export const CourseListing: React.FC = () => {
     setCourseToDelete(null)
   }
 
-  const handleEditCourse = (course: Course) => {
+  const handleEditCourse = (course: CourseData) => {
     if (!isAdmin) return
     navigate(`/course-editor/${course.id}`)
   }
+
+  const handleError = (error: FirebaseError | Error) => {
+    console.error('Error:', error);
+    return error instanceof FirebaseError ? error.message : 'An error occurred';
+  };
+
+  const handleCourseClick = async (course: CourseData) => {
+    if (course.accessType !== 'free') {
+      try {
+        const response = await fetch('/.netlify/functions/check-subscription-status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: user?.uid,
+            courseId: course.id,
+            accessType: course.accessType
+          })
+        });
+        
+        const data = await response.json();
+        
+        if (!data.canAccessCourse) {
+          navigate(course.accessType === 'subscription' ? '/pricing' : `/payment/${course.id}`);
+          return;
+        }
+      } catch (error) {
+        console.error('Error checking access:', error);
+      }
+    }
+    
+    navigate(`/course/${course.id}`);
+  };
 
   return (
     <>
@@ -155,8 +207,12 @@ export const CourseListing: React.FC = () => {
               {currentCourses.map((course) => (
                 <Card key={course.id}>
                   <CardHeader>
-                    <img src={course.imageUrl} alt={course.name} className="w-full h-48 object-cover mb-4" />
-                    <CardTitle>{course.name}</CardTitle>
+                    <img 
+                      src={course.thumbnail || course.imageUrl} 
+                      alt={course.title} 
+                      className="w-full h-48 object-cover mb-4" 
+                    />
+                    <CardTitle>{course.title}</CardTitle>
                   </CardHeader>
                   <CardContent>
                     <p className="text-sm text-gray-500 mb-4">{course.description}</p>
@@ -166,7 +222,9 @@ export const CourseListing: React.FC = () => {
                     <span className="text-sm bg-blue-100 text-blue-800 px-2 py-1 rounded">{course.category}</span>
                     <div className="flex items-center">
                       <span className="text-2xl font-bold text-green-600">${course.price}</span>
-                      <span className="text-sm text-gray-500 ml-2">/{course.videoCount} Videos</span>
+                      <span className="text-sm text-gray-500 ml-2">
+                        {course.chapters?.reduce((total, chapter) => total + chapter.lessons.length, 0) || 0} Videos
+                      </span>
                     </div>
                   </CardFooter>
                   {isAdmin && (
@@ -184,7 +242,7 @@ export const CourseListing: React.FC = () => {
                           <DialogHeader>
                             <DialogTitle>Confirm Deletion</DialogTitle>
                             <DialogDescription>
-                              Are you sure you want to delete the course "{courseToDelete?.name}"? This action cannot be undone.
+                              Are you sure you want to delete the course "{courseToDelete?.title}"? This action cannot be undone.
                             </DialogDescription>
                           </DialogHeader>
                           <DialogFooter>
